@@ -197,6 +197,7 @@ function renderHome() {
       <div class="progress"><div style="width:${allQ.length?done/allQ.length*100:0}%"></div></div>
       <div style="font-size:12px;color:var(--text-2);margin-top:6px">选择题进度 ${done}/${allQ.length} · 大题已学 ${bigDone}/${allBig.length}</div>
     </div>
+    <button class="list-item" onclick="go('mode')"><div class="icon">练</div><div>开始刷题<div style="font-size:12px;color:var(--text-2)">练习 / 模考 / 智能组卷 三种模式</div></div><span class="badge">›</span></button>
     <button class="list-item" onclick="go('papers')"><div class="icon">题</div><div>按套卷刷题<div style="font-size:12px;color:var(--text-2)">8 套卷，单选 + 多选 + 大题</div></div><span class="badge">›</span></button>
     <button class="list-item" onclick="go('wrong')"><div class="icon">错</div><div>错题本<div style="font-size:12px;color:var(--text-2)">自动记录，支持重练</div></div><span class="badge">${wrong} 题 ›</span></button>
     <button class="list-item" onclick="go('stats')"><div class="icon">析</div><div>统计分析<div style="font-size:12px;color:var(--text-2)">知识点 / 错因 / 进度</div></div><span class="badge">›</span></button>
@@ -206,6 +207,406 @@ function renderHome() {
       数据保存在本机浏览器中，无需联网登录。添加到桌面后可离线全屏使用。
     </div>
   </div>`;
+}
+
+/* ================= 刷题模式系统 ================= */
+// 模式：practice 练习 / exam 模考 / smart 智能组卷
+let EXAM_SET = null;   // 模考/组卷状态 { qs, idx, answers:[], flags:Set, timer, remaining, withBig, duration }
+
+/* ---------- 模式选择页 ---------- */
+function renderMode() {
+  const qCount = DB.papers.reduce((s, p) => s + qAll(p).length, 0);
+  app.innerHTML = `
+  <div class="topbar"><button class="back" onclick="back()">‹</button><h1>选择刷题模式</h1></div>
+  <div class="page">
+    <div class="mode-bar" style="position:static;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:14px">
+      <button class="mode-tab on" onclick="modePick('practice')">练习模式<span class="mt-sub">逐题 · 即时反馈</span></button>
+      <button class="mode-tab" onclick="modePick('exam')">模考模式<span class="mt-sub">33题 · 50分</span></button>
+      <button class="mode-tab" onclick="modePick('smart')">智能组卷<span class="mt-sub">随机抽题组卷</span></button>
+    </div>
+    <div id="mode-panel">${modePanelHtml('practice')}</div>
+  </div>`;
+}
+function modePick(m) {
+  window._curMode = m;
+  document.querySelectorAll('.mode-bar .mode-tab').forEach((el, i) => {
+    el.classList.toggle('on', ['practice','exam','smart'][i] === m);
+  });
+  $('#mode-panel').innerHTML = modePanelHtml(m);
+}
+function modePanelHtml(m) {
+  if (m === 'practice') {
+    const instant = PRACTICE_INSTANT;
+    return `
+    <div class="card">
+      <h2>练习模式</h2>
+      <p style="font-size:13px;color:var(--text-2);line-height:1.7">自由刷题，按套卷或全库练习，记录对错与错因。</p>
+      <div style="margin-top:6px;font-size:13px;color:var(--text-2);font-weight:600">判分方式</div>
+      <div class="sub-switch">
+        <div class="ss-item ${instant?'on':''}" onclick="setInstant(true)">
+          <span class="ss-dot"></span><span>即时判分<span class="ss-desc">选完立刻显示对错与解析</span></span>
+        </div>
+        <div class="ss-item ${!instant?'on':''}" onclick="setInstant(false)">
+          <span class="ss-dot"></span><span>统一判分<span class="ss-desc">全部选完提交后一起判</span></span>
+        </div>
+      </div>
+    </div>
+    <button class="btn" onclick="go('papers')">选择套卷开始练习 ›</button>
+    <button class="btn ghost" onclick="startQuiz(0,'wrongAll',{instant})">练习错题本（${DB.papers.flatMap(qAll).filter(q=>mastery(q.id)===1).length}）</button>`;
+  }
+  if (m === 'exam') {
+    return `
+    <div class="card">
+      <h2>模考模式</h2>
+      <p style="font-size:13px;color:var(--text-2);line-height:1.7">单选 16 题 + 多选 17 题，满分 50 分。不即时判分，交卷后统一出分。</p>
+      <div class="set-row">
+        <div><div class="sr-label">纳入分析题判分</div><div class="sr-hint">开启后大题也计入总分（模拟完整卷）</div></div>
+        <div class="toggle ${EXAM_WITH_BIG?'on':''}" onclick="toggleWithBig()"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="set-row" style="border:none"><div><div class="sr-label">倒计时时长</div><div class="sr-hint">时间到自动交卷</div></div></div>
+      <div class="dur-chips">
+        ${[15, 25, 40, 60, 90].map(d => `<div class="chip ${EXAM_DURATION===d?'on':''}" onclick="setDuration(${d})">${d} 分钟</div>`).join('')}
+      </div>
+    </div>
+    <button class="btn" onclick="startExam(1)">开始模考（第 1 套）›</button>
+    <div class="card" style="font-size:13px;color:var(--text-2);line-height:1.7">模考使用指定套卷的选择题结构（单选 16 + 多选 17）。</div>`;
+  }
+  // smart
+  return `
+    <div class="card">
+      <h2>智能组卷</h2>
+      <p style="font-size:13px;color:var(--text-2);line-height:1.7">从肖八 8 套卷 ${DB.papers.reduce((s,p)=>s+qAll(p).length,0)} 道选择题中随机抽取，按考研结构组卷。</p>
+      <div class="set-row">
+        <div><div class="sr-label">纳入分析题判分</div><div class="sr-hint">开启后随机抽大题计入总分</div></div>
+        <div class="toggle ${EXAM_WITH_BIG?'on':''}" onclick="toggleWithBig()"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="set-row" style="border:none"><div><div class="sr-label">倒计时时长</div><div class="sr-hint">时间到自动交卷</div></div></div>
+      <div class="dur-chips">
+        ${[15, 25, 40, 60, 90].map(d => `<div class="chip ${EXAM_DURATION===d?'on':''}" onclick="setDuration(${d})">${d} 分钟</div>`).join('')}
+      </div>
+    </div>
+    <button class="btn" onclick="startSmart()">随机组卷开始 ›</button>
+    <button class="btn ghost" onclick="startSmart()">换一套（重新抽题）</button>`;
+}
+
+/* 练习模式子开关 */
+function setInstant(v) { PRACTICE_INSTANT = v; modePick('practice'); }
+
+/* 模考设置全局 */
+let EXAM_WITH_BIG = false;
+let EXAM_DURATION = 60; // 分钟
+function toggleWithBig() {
+  EXAM_WITH_BIG = !EXAM_WITH_BIG;
+  const cur = window._curMode || 'exam';
+  document.querySelectorAll('.mode-bar .mode-tab').forEach((el, i) => {
+    el.classList.toggle('on', ['practice','exam','smart'][i] === cur);
+  });
+  $('#mode-panel').innerHTML = modePanelHtml(cur);
+}
+function setDuration(d) {
+  EXAM_DURATION = d;
+  const cur = window._curMode || 'exam';
+  document.querySelectorAll('.mode-bar .mode-tab').forEach((el, i) => {
+    el.classList.toggle('on', ['practice','exam','smart'][i] === cur);
+  });
+  $('#mode-panel').innerHTML = modePanelHtml(cur);
+}
+
+/* ---------- 模考 / 组卷启动 ---------- */
+// 构建试卷：pid 为套卷号；smart 时随机抽
+function buildExam(smart) {
+  let singles, multis, bigs, sourceLabel;
+  if (smart) {
+    // 从所有套卷随机抽 16 单选 + 17 多选
+    const allSingles = DB.papers.flatMap(p => p.singles);
+    const allMultis = DB.papers.flatMap(p => p.multis);
+    const allBigs = DB.papers.flatMap(p => p.bigs);
+    singles = shuffle(allSingles).slice(0, 16);
+    multis = shuffle(allMultis).slice(0, 17);
+    bigs = EXAM_WITH_BIG ? shuffle(allBigs).slice(0, 2) : [];
+    sourceLabel = '智能组卷';
+  } else {
+    const p = DB.papers.find(x => x.id === (EXAM_SET?.pid || 1));
+    singles = p.singles; multis = p.multis;
+    bigs = EXAM_WITH_BIG ? p.bigs : [];
+    sourceLabel = `第 ${p.id} 套`;
+  }
+  // 统一编号：单选 1-16，多选 17-33
+  const qs = [...singles, ...multis].map((q, i) => ({
+    ...q, examNum: i + 1, part: i < 16 ? 'single' : 'multi'
+  }));
+  return { qs, bigs, sourceLabel, total: qs.length, full: 50 + (bigs.length * 10) };
+}
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+
+function startExam(pid) {
+  EXAM_SET = { pid, smart: false, idx: 0, picks: {}, flags: new Set(), remaining: EXAM_DURATION * 60, withBig: EXAM_WITH_BIG };
+  const built = buildExam(false);
+  Object.assign(EXAM_SET, built);
+  EXAM_SET.picks = {};
+  EXAM_SET.flags = new Set();
+  startExamTimer();
+  state = { view: 'exam' }; navStack = [{ view: 'mode' }];
+  render();
+}
+function startSmart() {
+  EXAM_SET = { smart: true, idx: 0, picks: {}, flags: new Set(), remaining: EXAM_DURATION * 60, withBig: EXAM_WITH_BIG };
+  const built = buildExam(true);
+  Object.assign(EXAM_SET, built);
+  EXAM_SET.picks = {};
+  EXAM_SET.flags = new Set();
+  startExamTimer();
+  state = { view: 'exam' }; navStack = [{ view: 'mode' }];
+  render();
+}
+
+/* ---------- 模考倒计时 ---------- */
+let EXAM_TIMER = null;
+function startExamTimer() {
+  clearInterval(EXAM_TIMER);
+  EXAM_TIMER = setInterval(() => {
+    if (state.view !== 'exam') return;
+    EXAM_SET.remaining--;
+    updateExamTimer();
+    if (EXAM_SET.remaining <= 0) { submitExam(true); }
+  }, 1000);
+}
+function updateExamTimer() {
+  const el = $('#eb-timer');
+  if (!el) return;
+  const s = Math.max(0, EXAM_SET.remaining);
+  const mm = String(Math.floor(s / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  el.textContent = `${mm}:${ss}`;
+  el.className = 'eb-timer' + (s <= 60 ? ' warn' : '') + (s <= 15 ? ' danger' : '');
+}
+function fmtClock(s) {
+  const mm = String(Math.floor(s / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
+/* ---------- 模考渲染 ---------- */
+function renderExam() {
+  const E = EXAM_SET;
+  if (!E) return renderMode();
+  const q = E.qs[E.idx];
+  const isMulti = q.part === 'multi';
+  const picked = E.picks[q.id] || [];
+  const doneCount = Object.keys(E.picks).length;
+  const tagId = getTag(q);
+
+  // 顶部：倒计时 + 进度条
+  const examBar = `
+  <div class="exam-bar">
+    <div class="eb-top">
+      <div class="eb-timer ${E.remaining<=60?'warn':''} ${E.remaining<=15?'danger':''}" id="eb-timer">${fmtClock(E.remaining)}</div>
+      <div class="eb-count">${E.sourceLabel} · ${doneCount}/${E.qs.length}</div>
+    </div>
+    <div class="exam-progress"><div style="width:${doneCount/E.qs.length*100}%"></div></div>
+  </div>`;
+
+  // 题号导航
+  const nav = `
+  <div class="qnav">
+    ${E.qs.map((qq, i) => {
+      const cls = ['qn', E.picks[qq.id] ? 'done' : '', E.flags.has(qq.id) ? 'flag' : '', i === E.idx ? 'cur' : ''].join(' ').trim();
+      return `<div class="${cls}" onclick="examJump(${i})">${qq.examNum}</div>`;
+    }).join('')}
+  </div>`;
+
+  // 选项
+  const optsHtml = q.options.map((t, i) => {
+    const L = 'ABCD'[i];
+    const sel = picked.includes(L);
+    return `<div class="option ${sel?'selected':''}" onclick="examPick('${L}')"><span class="letter">${L}</span><span>${esc(t)}</span></div>`;
+  }).join('');
+
+  app.innerHTML = `
+  <div class="topbar"><button class="back" onclick="examExit()">‹</button>
+    <h1>${E.sourceLabel} · 模考</h1>
+    <button class="action" onclick="examSubmit()">交卷</button></div>
+  ${examBar}
+  <div class="page" style="padding-top:10px">
+    ${nav}
+    <div class="q-tags" style="margin-top:12px"><button class="q-type-tag ${tagCls(tagId)}" onclick="switchTag('${q.id}')">${tagName(tagId)}<span class="swap">切换</span></button></div>
+    <div class="q-meta" style="opacity:.6"><span class="tag" style="background:transparent;color:var(--text-3);padding-left:0">${esc(q.subject)}</span>
+      <span class="tag" style="background:transparent;color:var(--text-3);padding-left:0">${isMulti?'多选':'单选'} · ${isMulti?'2分':'1分'}</span></div>
+    <div class="q-stem">${esc(q.stem)}</div>
+    ${isMulti ? '<div class="multi-tip">多选题：多选、少选、错选均不得分（少选得 1 分）</div>' : ''}
+    ${optsHtml}
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="flag-btn ${E.flags.has(q.id)?'on':''}" onclick="examFlag()">${E.flags.has(q.id)?'已标记':'标记待查'}</button>
+    </div>
+    <div class="bottombar">
+      <button class="btn ghost" onclick="examPrev()" ${E.idx===0?'disabled':''}>上一题</button>
+      <button class="btn" onclick="examNext()">${E.idx===E.qs.length-1?'去交卷':'下一题'}</button>
+    </div>
+  </div>`;
+}
+
+/* 模考选项选择（不判分） */
+function examPick(L) {
+  const E = EXAM_SET;
+  const q = E.qs[E.idx];
+  let picks = E.picks[q.id] || [];
+  if (q.part === 'single') {
+    picks = [L];
+  } else {
+    const i = picks.indexOf(L);
+    if (i >= 0) picks.splice(i, 1); else picks.push(L);
+    picks.sort();
+  }
+  E.picks[q.id] = picks;
+  renderExam();
+}
+function examJump(i) { EXAM_SET.idx = i; renderExam(); window.scrollTo(0, 0); }
+function examPrev() { if (EXAM_SET.idx > 0) { EXAM_SET.idx--; renderExam(); window.scrollTo(0,0); } }
+function examNext() {
+  if (EXAM_SET.idx < EXAM_SET.qs.length - 1) { EXAM_SET.idx++; renderExam(); window.scrollTo(0,0); }
+  else { submitExam(); }
+}
+function examFlag() {
+  const q = EXAM_SET.qs[EXAM_SET.idx];
+  if (EXAM_SET.flags.has(q.id)) EXAM_SET.flags.delete(q.id); else EXAM_SET.flags.add(q.id);
+  renderExam();
+}
+function examExit() {
+  openModal(`
+    <p>确定退出模考？当前作答不会保留。</p>
+    <div style="display:flex;gap:10px">
+      <button class="btn ghost" style="margin:0" onclick="closeModal()">继续作答</button>
+      <button class="btn" style="margin:0" onclick="abortExam()">退出</button>
+    </div>`, '退出模考');
+}
+function abortExam() {
+  clearInterval(EXAM_TIMER);
+  closeModal();
+  state = { view: 'mode' }; navStack = []; render();
+}
+
+/* 交卷确认 */
+function examSubmit() { submitExam(); }
+function submitExam(auto = false) {
+  clearInterval(EXAM_TIMER);
+  const E = EXAM_SET;
+  const doneCount = Object.keys(E.picks).length;
+  const remain = E.qs.length - doneCount;
+  if (!auto && remain > 0) {
+    openModal(`
+      <p>还有 <b style="color:var(--warn)">${remain}</b> 题未作答，确定交卷吗？</p>
+      <div class="confirm-rows">
+        <div class="cr"><span>已作答</span><span class="cr-v">${doneCount} / ${E.qs.length}</span></div>
+        <div class="cr"><span>剩余时间</span><span class="cr-v">${fmtClock(Math.max(0,E.remaining))}</span></div>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="btn ghost" style="margin:0" onclick="closeModal()">继续作答</button>
+        <button class="btn" style="margin:0" onclick="doGrade(false)">确定交卷</button>
+      </div>`, '确认交卷');
+    return;
+  }
+  doGrade(auto);
+}
+function doGrade(auto = false) {
+  closeModal();
+  const E = EXAM_SET;
+  const graded = E.qs.map(q => {
+    const picked = (E.picks[q.id] || []).join('');
+    let correct = false, score = 0;
+    if (q.part === 'single') { correct = picked === q.answer; score = correct ? 1 : 0; }
+    else if (!picked) { correct = false; score = 0; } // 未作答 0 分
+    else {
+      const a = q.answer;
+      const wrongPick = [...picked].some(L => !a.includes(L));
+      const missing = [...a].some(L => !picked.includes(L));
+      if (!wrongPick && !missing) { correct = true; score = 2; }      // 全对
+      else if (!wrongPick && missing) { correct = false; score = 1; }  // 少选
+      else { correct = false; score = 0; }                             // 错选
+    }
+    return { q, picked, correct, score };
+  });
+  // 写入 P.answers 记录
+  for (const g of graded) {
+    const a = P.answers[g.q.id] || { times: 0, wrongTimes: 0, reasons: [], mastered: false };
+    a.times++; if (!g.correct) { a.wrongTimes++; if (!a.reasons.length) a.reasons = ['知识遗漏']; }
+    else if (g.correct && a.times >= 3 && (a.times - a.wrongTimes) / a.times >= 0.8) a.mastered = true;
+    a.picked = g.picked; a.correct = g.correct; a.lastTs = Date.now();
+    P.answers[g.q.id] = a;
+  }
+  save();
+  const totalScore = graded.reduce((s, g) => s + g.score, 0);
+  const fullScore = E.qs.length === 33 ? 50 : E.full;
+  const wrongCount = graded.filter(g => !g.correct).length;
+  EXAM_RESULT = { graded, totalScore, fullScore, wrongCount, sourceLabel: E.sourceLabel, auto };
+  // 记录会话
+  P.sessions.push({ ts: Date.now(), paper: E.sourceLabel, type: 'exam',
+    total: graded.length, correct: graded.filter(g => g.correct).length, score: totalScore });
+  if (P.sessions.length > 100) P.sessions = P.sessions.slice(-100);
+  save();
+  state = { view: 'examResult' }; render();
+}
+let EXAM_RESULT = null;
+
+/* ---------- 模考得分报告 ---------- */
+function renderExamResult() {
+  const R = EXAM_RESULT;
+  if (!R) return renderMode();
+  const rate = R.fullScore ? Math.round(R.totalScore / R.fullScore * 100) : 0;
+  const cls = rate >= 80 ? '' : rate >= 60 ? 'mid' : 'bad';
+  const wrongs = R.graded.filter(g => !g.correct);
+  const empty = R.graded.filter(g => !g.picked);
+  app.innerHTML = `
+  <div class="topbar"><button class="back" onclick="state={view:'mode'};navStack=[];render()">‹</button><h1>${R.sourceLabel} · 得分报告</h1></div>
+  <div class="page">
+    <div class="report-head">
+      <div class="rh-score ${cls}">${R.totalScore}<span style="font-size:20px"> / ${R.fullScore}</span></div>
+      <div class="rh-sub">正确率 ${rate}%</div>
+      <div class="rh-full">${R.auto ? '时间到，已自动交卷' : ''}</div>
+    </div>
+    <div class="report-grid">
+      <div class="rg g-ok"><div class="n">${R.graded.filter(g=>g.correct).length}</div><div class="l">答对</div></div>
+      <div class="rg g-bad"><div class="n">${wrongs.length}</div><div class="l">答错</div></div>
+      <div class="rg g-warn"><div class="n">${empty.length}</div><div class="l">未作答</div></div>
+      <div class="rg"><div class="n">${R.graded.filter(g=>g.score>0&&!g.correct).length}</div><div class="l">部分得分</div></div>
+    </div>
+    ${wrongs.length ? `<div class="card"><h2>错题回顾（${wrongs.length}）</h2>
+      ${wrongs.map(g => {
+        const q = g.q;
+        return `<button class="rq-item rq-wrong" onclick="examReview('${q.id}')">
+          <span class="rq-num">${q.examNum}</span>
+          <span class="rq-body">${esc(q.stem.slice(0, 26))}…</span>
+          <span class="rq-ans">你的 ${esc(g.picked||'—')} / <b>${esc(q.answer)}</b></span>
+        </button>`;
+      }).join('')}
+    </div>` : `<div class="card" style="text-align:center;color:var(--ok);font-weight:600">全部正确，优秀！</div>`}
+    <div class="card"><h2>全部题目</h2>
+      ${R.graded.map(g => {
+        const q = g.q;
+        return `<button class="rq-item ${g.correct?'':'rq-wrong'}" onclick="examReview('${q.id}')">
+          <span class="rq-num">${q.examNum}</span>
+          <span class="rq-body">${esc(q.stem.slice(0, 26))}…</span>
+          <span class="rq-ans">${g.correct?'<b>'+esc(g.picked)+'</b>':esc(g.picked||'—')} / ${esc(q.answer)}</span>
+        </button>`;
+      }).join('')}
+    </div>
+    <button class="btn" onclick="state={view:'mode'};navStack=[];render()">返回模式选择</button>
+  </div>`;
+}
+/* 模考错题回顾：单题解析视图 */
+function examReview(qid) {
+  const q = qById(qid);
+  if (!q) return;
+  quiz = { qs: [q], idx: 0, mode: 'single', results: [{ qid: q.id, picked: EXAM_RESULT.graded.find(g=>g.q.id===qid)?.picked||'', correct: EXAM_RESULT.graded.find(g=>g.q.id===qid)?.correct||false }], instant: true };
+  state = { view: 'quiz' }; navStack = [{ view: 'examResult' }];
+  render();
 }
 
 /* ---------- 套卷列表 ---------- */
@@ -263,7 +664,10 @@ function renderPaper() {
 
 /* ---------- 刷题 ---------- */
 let quiz = null;
-function startQuiz(pid, mode) {
+// 全局刷题设置（练习模式即时/统一判分）
+let PRACTICE_INSTANT = true;
+
+function startQuiz(pid, mode, opts = {}) {
   let qs;
   if (mode === 'wrongAll') {
     qs = DB.papers.flatMap(qAll).filter(q => mastery(q.id) === 1);
@@ -275,7 +679,7 @@ function startQuiz(pid, mode) {
     if (mode === 'wrongOnly') qs = qs.filter(q => mastery(q.id) === 1);
   }
   if (!qs.length) { toast('没有可刷的题目'); return; }
-  quiz = { qs, idx: 0, mode, pid, results: [] };
+  quiz = { qs, idx: 0, mode, pid, results: [], instant: opts.instant !== undefined ? opts.instant : PRACTICE_INSTANT, toggled: null };
   state = { view: 'quiz' }; navStack = [{ view: 'paper', pid }];
   render();
 }
@@ -286,6 +690,8 @@ function renderQuiz() {
   const isMulti = q.type === 'multi';
   const doneThis = quiz.results.find(r => r.qid === q.id);
   const isRecite = quiz.mode === 'recite';
+  // 统一判分模式：已作答但未判分（correct 为 null）不算"已判分"
+  const graded = doneThis && doneThis.correct !== null;
 
   // 背题模式：纯浏览题干 + 答案 + 解析，不判分，翻页记忆
   if (isRecite) {
@@ -323,19 +729,20 @@ function renderQuiz() {
   let optsHtml = q.options.map((t, i) => {
     const L = 'ABCD'[i];
     let cls = 'option';
-    if (doneThis) {
+    if (graded) {
       if (q.answer.includes(L)) cls += ' correct';
       if (doneThis.picked.includes(L) && !q.answer.includes(L)) cls += ' wrong';
       cls += ' disabled';
-    } else if (isMulti && doneThis === undefined) {
-      // multi: toggled
+    } else if (!graded) {
+      // 未判分：显示当前已选状态（统一判分模式下为已选；即时单选不显示）
       if (quiz.toggled?.includes(L)) cls += ' selected';
+      else if (doneThis?.picked?.includes(L)) cls += ' selected';
     }
     return `<div class="${cls}" data-l="${L}" onclick="pickOpt('${L}')"><span class="letter">${L}</span><span>${esc(t)}</span></div>`;
   }).join('');
 
   let analysisHtml = '';
-  if (doneThis) {
+  if (graded) {
     const rs = a?.reasons || [];
     const correct = doneThis.correct;
     const collapsed = P._analysisCollapsed && P._analysisCollapsed[q.id];
@@ -368,6 +775,34 @@ function renderQuiz() {
       <button class="q-type-tag ${tagCls(tagId)}" onclick="switchTag('${q.id}')">${tagName(tagId)}<span class="swap">切换</span></button>
     </div>`;
 
+  // 顶部题号进度条（统一判分模式显示）
+  const progressBar = !quiz.instant
+    ? `<div class="exam-progress" style="margin:4px 0 12px"><div style="width:${quiz.results.length/quiz.qs.length*100}%"></div></div>
+       <div style="font-size:12px;color:var(--text-3);margin-bottom:6px">已作答 ${quiz.results.length}/${quiz.qs.length} 题</div>`
+    : '';
+
+  // 底部栏：即时判分 vs 统一判分
+  let bottomHtml;
+  if (analysisHtml) {
+    bottomHtml = analysisHtml; // 即时判分已作答：显示解析 + 下一题
+  } else if (!quiz.instant) {
+    // 统一判分：底部放上一题 / 下一题 / 提交判分
+    const isLast = quiz.idx === quiz.qs.length - 1;
+    bottomHtml = `<div class="bottombar">
+      <button class="btn ghost" onclick="practicePrev()" ${quiz.idx===0?'disabled':''}>上一题</button>
+      ${isMulti
+        ? `<button class="btn" onclick="confirmMulti()">确认本题</button>`
+        : ''}
+      <button class="btn" onclick="practiceNext()">${isLast ? '完成作答' : '下一题'}</button>
+    </div>
+    <div class="submit-hint">全部答完点击「完成作答」统一判分</div>`;
+  } else {
+    // 即时判分未作答
+    bottomHtml = `<div class="bottombar">${isMulti
+      ? `<button class="btn" id="confirmBtn" onclick="confirmMulti()">确认（可多选）</button>`
+      : `<span style="font-size:13px;color:var(--text-3);align-self:center">点击选项作答</span>`}</div>`;
+  }
+
   app.innerHTML = `
   <div class="topbar"><button class="back" onclick="back()">‹</button>
     <h1>第 ${paperOf(q.id).id} 套 · 第 ${q.num} 题（${isMulti?'多选':'单选'}）</h1>
@@ -376,12 +811,57 @@ function renderQuiz() {
     ${tagHtml}
     <div class="q-meta" style="opacity:.6"><span class="tag" style="background:transparent;color:var(--text-3);padding-left:0">${esc(q.subject)}</span>
       ${a?.times?`<span style="font-size:11px;color:var(--text-3)">· 刷 ${a.times} 次</span>`:''}</div>
+    ${progressBar}
     <div class="q-stem">${esc(q.stem)}</div>
     ${optsHtml}
-    ${analysisHtml || `<div class="bottombar">${isMulti
-      ? `<button class="btn" id="confirmBtn" onclick="confirmMulti()">确认（可多选）</button>`
-      : `<span style="font-size:13px;color:var(--text-3);align-self:center">点击选项作答</span>`}</div>`}
+    ${bottomHtml}
   </div>`;
+}
+
+/* 统一判分模式导航 */
+function practicePrev() {
+  if (quiz.idx > 0) { quiz.idx--; renderQuiz(); window.scrollTo(0, 0); }
+}
+function practiceNext() {
+  // 若当前题已选择，保存；未选择则跳过或提示
+  const q = quiz.qs[quiz.idx];
+  const picked = (quiz.toggled || []).sort().join('');
+  if (picked && !quiz.results.find(r => r.qid === q.id)) {
+    quiz.results.push({ qid: q.id, picked, correct: null });
+  }
+  quiz.toggled = null;
+  if (quiz.idx < quiz.qs.length - 1) { quiz.idx++; renderQuiz(); window.scrollTo(0, 0); }
+  else { submitAll(); }
+}
+/* 统一判分：提交全部，逐题判分 */
+function submitAll() {
+  if (!quiz.results.length) { toast('尚未作答任何题目'); return; }
+  // 逐题判分
+  const graded = quiz.results.map(r => {
+    const q = qById(r.qid);
+    const correct = r.picked === q.answer;
+    return { ...r, correct };
+  });
+  // 写入 P.answers 记录
+  for (const r of graded) {
+    const q = qById(r.qid);
+    const a = P.answers[q.id] || { times: 0, wrongTimes: 0, reasons: [], mastered: false };
+    a.times++; if (!r.correct) { a.wrongTimes++; if (!a.reasons.length) a.reasons = ['知识遗漏']; }
+    else if (r.correct && a.times >= 3 && (a.times - a.wrongTimes) / a.times >= 0.8) a.mastered = true;
+    a.picked = r.picked; a.correct = r.correct; a.lastTs = Date.now();
+    P.answers[q.id] = a;
+  }
+  save();
+  quiz.results = graded;
+  quiz.submitted = true;
+  // 记录会话
+  if (graded.length >= 5) {
+    P.sessions.push({ ts: Date.now(), paper: quiz.pid || '练习', type: quiz.mode,
+      total: graded.length, correct: graded.filter(r => r.correct).length });
+    if (P.sessions.length > 100) P.sessions = P.sessions.slice(-100);
+    save();
+  }
+  state = { view: 'quizResult' }; render();
 }
 
 /* 背题模式导航：纯浏览，不判分 */
@@ -424,20 +904,47 @@ function toggleAnalysis(qid) {
 }
 
 function pickOpt(L) {
-  if (quiz.results.find(r => r.qid === quiz.qs[quiz.idx].id)) return;
+  const cur = quiz.results.find(r => r.qid === quiz.qs[quiz.idx].id);
+  if (cur && cur.correct !== null) return; // 已判分不可改
   const q = quiz.qs[quiz.idx];
   if (q.type === 'multi') {
-    quiz.toggled = quiz.toggled || [];
+    if (!quiz.toggled) {
+      const saved = quiz.results.find(r => r.qid === q.id);
+      quiz.toggled = saved && saved.picked ? saved.picked.split('') : [];
+    }
     const i = quiz.toggled.indexOf(L);
     if (i >= 0) quiz.toggled.splice(i, 1); else quiz.toggled.push(L);
     renderQuiz();
   } else {
-    submitAnswer([L]);
+    if (quiz.instant) {
+      submitAnswer([L]);
+    } else {
+      // 统一判分模式：记录选择，进入下一题
+      quiz.toggled = [L];
+      commitPick();
+    }
   }
 }
 function confirmMulti() {
   if (!quiz.toggled || !quiz.toggled.length) { toast('请先选择选项'); return; }
-  submitAnswer([...quiz.toggled].sort());
+  if (quiz.instant) {
+    submitAnswer([...quiz.toggled].sort());
+  } else {
+    commitPick();
+  }
+}
+/* 统一判分模式：把当前选择存入 results（不判对错），进入下一题 */
+function commitPick() {
+  const q = quiz.qs[quiz.idx];
+  const picked = (quiz.toggled || []).sort().join('');
+  if (!picked) { toast('请先选择选项'); return; }
+  // 覆盖式记录（允许返回修改）
+  const idx = quiz.results.findIndex(r => r.qid === q.id);
+  if (idx >= 0) quiz.results[idx] = { qid: q.id, picked, correct: null };
+  else quiz.results.push({ qid: q.id, picked, correct: null });
+  quiz.toggled = null;
+  if (quiz.idx < quiz.qs.length - 1) { quiz.idx++; renderQuiz(); window.scrollTo(0, 0); }
+  else renderQuiz();
 }
 function submitAnswer(picked) {
   const q = quiz.qs[quiz.idx];
@@ -493,12 +1000,12 @@ function renderQuizResult() {
 }
 function retryWrong() {
   const wrongQids = quiz.results.filter(r => !r.correct).map(r => r.qid).map(qById);
-  quiz = { qs: wrongQids, idx: 0, mode: 'retry', results: [] };
+  quiz = { qs: wrongQids, idx: 0, mode: 'retry', results: [], instant: true, toggled: null };
   state = { view: 'quiz' }; navStack = [{ view: 'home' }];
   render();
 }
 function goQuestion(qid) {
-  quiz = { qs: [qById(qid)], idx: 0, mode: 'single', results: [] };
+  quiz = { qs: [qById(qid)], idx: 0, mode: 'single', results: [], instant: true, toggled: null };
   state = { view: 'quiz' }; render();
 }
 
@@ -761,7 +1268,8 @@ function installApp() {
 
 /* ---------- 渲染入口 ---------- */
 const views = { home: renderHome, papers: renderPapers, paper: renderPaper, quiz: renderQuiz,
-  quizResult: renderQuizResult, wrong: renderWrong, stats: renderStats, allq: renderAllQ, big: renderBig };
+  quizResult: renderQuizResult, wrong: renderWrong, stats: renderStats, allq: renderAllQ, big: renderBig,
+  mode: renderMode, exam: renderExam, examResult: renderExamResult };
 function render() { (views[state.view] || renderHome)(); }
 window.go = go; window.back = back; window.startQuiz = startQuiz; window.pickOpt = pickOpt;
 window.confirmMulti = confirmMulti; window.quizNext = quizNext; window.markReason = markReason;
@@ -771,6 +1279,13 @@ window.switchTag = switchTag; window.setTag = setTag; window.clearTag = clearTag
 window.toggleAnalysis = toggleAnalysis;
 window.recitePrev = recitePrev; window.reciteNext = reciteNext; window.installApp = installApp;
 window.closeModal = closeModal;
+window.modePick = modePick; window.setInstant = setInstant;
+window.toggleWithBig = toggleWithBig; window.setDuration = setDuration;
+window.startExam = startExam; window.startSmart = startSmart;
+window.examPick = examPick; window.examJump = examJump; window.examPrev = examPrev;
+window.examNext = examNext; window.examFlag = examFlag; window.examExit = examExit;
+window.examSubmit = examSubmit; window.abortExam = abortExam; window.doGrade = doGrade;
+window.examReview = examReview; window.practicePrev = practicePrev; window.practiceNext = practiceNext;
 window.state = state; Object.defineProperty(window, 'state', { get: () => state });
 
 fetch('data/questions.json').then(r => r.json()).then(d => {

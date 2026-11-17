@@ -1,5 +1,5 @@
 /* 肖八刷题 Service Worker - 离线缓存 */
-const CACHE = 'xiao8-v3';
+const CACHE = 'xiao8-v4';
 const ASSETS = [
   './', './index.html', './css/style.css', './js/app.js',
   './manifest.json', './data/questions.json',
