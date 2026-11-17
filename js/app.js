@@ -9,6 +9,95 @@ const SUBJECTS = ['马原','毛中特','习思想','史纲','思修法基','时�
 
 const ERR_REASONS = ['知识遗漏','审题偏差','干扰项迷惑','记忆模糊','粗心失误'];
 
+/* ---------- 智能题型标签 ---------- */
+const QTYPE_TAGS = [
+  { id: 'hat',     name: '帽子题',   cls: 'type-hat' },
+  { id: 'concept', name: '概念题',   cls: 'type-concept' },
+  { id: 'under',   name: '理解题',   cls: 'type-under' },
+  { id: 'quote',   name: '史料引文题', cls: 'type-quote' },
+  { id: 'calc',    name: '计算题',   cls: 'type-calc' },
+  { id: 'news',    name: '时政题',   cls: 'type-news' },
+  { id: 'big',     name: '分析大题', cls: 'type-big' },
+];
+// 帽子题关键词（题干含这些词→帽子题）
+const HAT_KW = ['本质','主导','核心','根本','首要','标志','关键','第一','中心','基础','前提','保证','源泉','动力','原则','宗旨','特征','性质','实质','灵魂'];
+// 史料引文题标志（题干含引号+古语/著作/人名）
+const QUOTE_KW = ['毛泽东','邓小平','习近平','马克思','恩格斯','列宁','指出','认为','强调','曾说','说过','《','》','“','”','『','』'];
+// 时政题标志
+const NEWS_KW = ['2025','2026','2027','二十大','二十届','中央','全会','人工智能大会','两会','全会精神','新时代','新征程','中国式现代化','十四五','十五五'];
+// 计算题标志
+const CALC_KW = ['计算','剩余价值','利润率','资本有机构成','周转','价值量','货币流通','社会总产值','平均利润','利息','股息'];
+
+function classifyTag(q) {
+  const stem = (q.stem || '').trim();
+  // 分析大题：有 questions 数组（大题结构）
+  if (q.type === 'big' || Array.isArray(q.questions)) return 'big';
+  // 计算题
+  if (CALC_KW.some(k => stem.includes(k))) return 'calc';
+  // 史料引文题：含人物言论或引号（优先于帽子题，如"毛泽东指出...首要..."）
+  if (QUOTE_KW.some(k => stem.includes(k)) || /[“”『』《》]/.test(stem)) return 'quote';
+  // 时政题（含年份/会议/政策）
+  if (NEWS_KW.some(k => stem.includes(k))) return 'news';
+  // 帽子题：含帽子关键词且是"XX是/就是/指"句式
+  if (HAT_KW.some(k => stem.includes(k)) && /是|指|即|属于|核心|根本|本质/.test(stem)) return 'hat';
+  // 概念题：题干含"是指/指的是/的含义/概念"
+  if (/是指|指的是|含义|概念|叫作|叫做/.test(stem)) return 'concept';
+  // 默认理解题
+  return 'under';
+}
+
+function getTag(q) {
+  const manual = P.tags && P.tags[q.id];
+  return manual || classifyTag(q);
+}
+function tagName(id) { const t = QTYPE_TAGS.find(x => x.id === id); return t ? t.name : id; }
+function tagCls(id) { const t = QTYPE_TAGS.find(x => x.id === id); return t ? t.cls : ''; }
+
+/* 考点关键词高亮（选择题解析内高亮） */
+function highlightKw(text) {
+  if (!text) return '';
+  const kw = ['正确','错误','本质','根本','核心','关键','前提','基础','决定','唯一','标准','首要','标志','普遍','客观','主观','规律','统一','条件','因果','联系','实践','认识','矛盾','发展','生产力','生产关系','上层建筑','经济基础'];
+  let out = esc(text);
+  // 先转义再高亮：按关键词在原文中查找
+  for (const k of kw) {
+    out = out.replace(new RegExp(k, 'g'), `<span class="kw">${k}</span>`);
+  }
+  return out;
+}
+
+/* 干扰项拆解：从解析文本按 A/B/C/D 逐条拆分 */
+function splitAnalysis(text, answer) {
+  if (!text) return [];
+  // 格式："原理阐述...A正确。B错误。C错误。D错误。"
+  // "X正确/错误"是上一段内容的结论标记，故每段解析 = 上一标记之后到本标记的内容（含本标记的判定）
+  const anchor = /([A-D](?:[、,，][A-D])*)\s*(正确|错误)/g;
+  const matches = [];
+  let m;
+  while ((m = anchor.exec(text)) !== null) {
+    matches.push({ idx: m.index, letters: m[1], verdict: m[2], full: m[0] });
+  }
+  if (!matches.length) {
+    return [{ letters: answer, ok: true, verdict: '', text: text.trim() }];
+  }
+  const items = [];
+  let prevEnd = 0;
+  for (const cur of matches) {
+    const letters = cur.letters.replace(/[、,，]/g, '');
+    const ok = cur.verdict === '正确';
+    // 本段正文 = 从上一段结束到本标记之前
+    const body = text.slice(prevEnd, cur.idx).trim().replace(/^[。；\s]+/, '');
+    items.push({ letters, ok, verdict: cur.verdict, text: body });
+    prevEnd = cur.idx + cur.full.length;
+  }
+  // 最后一个标记之后若还有内容（通常是收尾总结），附加
+  const tail = text.slice(prevEnd).trim().replace(/^[。；\s]+/, '');
+  if (tail && tail.length > 8) {
+    items.push({ letters: '', ok: true, verdict: '', text: tail });
+  }
+  // 过滤空段
+  return items.filter(it => it.text.length > 2);
+}
+
 const STORE_KEY = 'xiao8_progress_v1';
 
 function defaultProgress() {
@@ -17,6 +106,7 @@ function defaultProgress() {
     answers: {},
     bigStatus: {},      // bigId -> { viewed:n, revealedAll:false, lastTs }
     sessions: [],       // {ts, paper, type, total, correct}
+    tags: {},           // qid -> tagId（手动切换的题型标签）
     settings: { hideAnalysis: false }
   };
 }
@@ -44,7 +134,7 @@ function qById(qid) {
   for (const p of DB.papers) { const q = qAll(p).find(x => x.id === qid); if (q) return q; }
   return null;
 }
-function paperOf(qid) { return DB.papers.find(p => qAll(p).some(x => x.id === qid)); }
+function paperOf(qid) { return DB.papers.find(p => qAll(p).some(x => x.id === qid) || p.bigs.some(x => x.id === qid)); }
 function bigById(id) {
   for (const p of DB.papers) { const b = p.bigs.find(x => x.id === id); if (b) return b; }
   return null;
@@ -199,26 +289,28 @@ function renderQuiz() {
 
   // 背题模式：纯浏览题干 + 答案 + 解析，不判分，翻页记忆
   if (isRecite) {
+    const tagId = getTag(q);
+    const items = splitAnalysis(q.analysis, q.answer);
     app.innerHTML = `
     <div class="topbar"><button class="back" onclick="back()">‹</button>
       <h1>背题 · 第 ${paperOf(q.id).id} 套 · 第 ${q.num} 题（${isMulti?'多选':'单选'}）</h1>
       <span style="font-size:13px;opacity:.9">${quiz.idx+1}/${quiz.qs.length}</span></div>
     <div class="page">
-      <div class="q-meta"><span class="tag">${esc(q.subject)}</span>${q.knowledge?`<span class="tag" style="background:var(--warn-light);color:var(--warn)">${esc(q.knowledge)}</span>`:''}
-        ${a?.times?`<span class="tag red">已刷 ${a.times} 次 · 错 ${a.wrongTimes||0} 次</span>`:''}</div>
+      <div class="q-tags"><button class="q-type-tag ${tagCls(tagId)}" onclick="switchTag('${q.id}')">${tagName(tagId)}<span class="swap">切换</span></button></div>
+      <div class="q-meta" style="opacity:.6"><span class="tag" style="background:transparent;color:var(--text-3);padding-left:0">${esc(q.subject)}</span></div>
       <div class="q-stem">${esc(q.stem)}</div>
       ${q.options.map((t, i) => {
         const L = 'ABCD'[i];
         const isAns = q.answer.includes(L);
         return `<div class="option" style="${isAns?'border-color:var(--ok);background:#e9f7ee;':''}${!isAns?'opacity:.72':''}">
-          <span class="letter" style="${isAns?'color:var(--ok)':''}">${L}.</span><span>${esc(t)}</span>
+          <span class="letter" style="${isAns?'color:var(--ok)':''}">${L}</span><span>${esc(t)}</span>
           ${isAns?'<span class="tag" style="margin-left:auto;background:#e9f7ee;color:var(--ok);flex-shrink:0">正确</span>':''}
         </div>`;
       }).join('')}
       <div class="recite-answer">
         <div class="ra-title">答案与解析</div>
         <div class="ra-key">${esc(q.answer)}</div>
-        <div class="ra-analysis">${esc(q.analysis || '')}</div>
+        ${items.length ? items.map(it => `<div class="ra-analysis">${it.letters?`<b>${esc(it.letters)}</b> `:''}${highlightKw(it.text)}</div>`).join('') : `<div class="ra-analysis">${highlightKw(q.analysis || '')}</div>`}
       </div>
       <div class="bottombar">
         <button class="btn ghost" onclick="recitePrev()" ${quiz.idx===0?'disabled':''}>上一题</button>
@@ -239,28 +331,51 @@ function renderQuiz() {
       // multi: toggled
       if (quiz.toggled?.includes(L)) cls += ' selected';
     }
-    return `<div class="${cls}" data-l="${L}" onclick="pickOpt('${L}')"><span class="letter">${L}.</span><span>${esc(t)}</span></div>`;
+    return `<div class="${cls}" data-l="${L}" onclick="pickOpt('${L}')"><span class="letter">${L}</span><span>${esc(t)}</span></div>`;
   }).join('');
 
   let analysisHtml = '';
   if (doneThis) {
     const rs = a?.reasons || [];
+    const correct = doneThis.correct;
+    const collapsed = P._analysisCollapsed && P._analysisCollapsed[q.id];
+    const ansBanner = `<div class="ans-banner ${correct?'':'wrong-ans'}">${correct?'回答正确':'回答错误'} · 正确答案 ${esc(q.answer)}</div>`;
+    let bodyHtml = '';
+    if (!collapsed) {
+      const items = splitAnalysis(q.analysis, q.answer);
+      const itemsHtml = items.length ? items.map(it => {
+        const letterHtml = it.letters ? `<span class="it-letter">${esc(it.letters)}</span>` : '';
+        const cls = it.verdict === '错误' ? 'it-bad' : 'it-ok';
+        return `<div class="item ${cls}">${letterHtml}${highlightKw(it.text)}</div>`;
+      }).join('') : `<div>${highlightKw(q.analysis || '')}</div>`;
+      bodyHtml = itemsHtml;
+    }
     analysisHtml = `
-      <div class="analysis"><div class="title">${q.answer.includes(doneThis.picked) && doneThis.picked === q.answer ? '回答正确' : '回答错误 · 正确答案 ' + q.answer}</div>
-      <div>${esc(q.analysis || '')}</div></div>
-      ${!doneThis.correct ? `
-      <div style="margin-top:12px"><div style="font-size:13px;color:var(--text-2);margin-bottom:6px">这道题做错的原因是？（可选）</div>
+      <div class="analysis">
+        ${ansBanner}
+        ${bodyHtml}
+        <button class="analysis-toggle" onclick="toggleAnalysis('${q.id}')">${collapsed?'展开解析':'收起解析'}</button>
+      </div>
+      ${!correct ? `
+      <div style="margin-top:14px"><div style="font-size:13px;color:var(--text-2);margin-bottom:6px">这道题做错的原因是？（可选）</div>
       <div class="err-reasons">${ERR_REASONS.map(r => `<button class="${rs.includes(r)?'on':''}" onclick="markReason('${q.id}','${r}')">${r}</button>`).join('')}</div></div>` : ''}
       <div class="bottombar"><button class="btn" onclick="quizNext()">${quiz.idx === quiz.qs.length-1 ? '查看结果' : '下一题'}</button></div>`;
   }
+
+  const tagId = getTag(q);
+  const tagHtml = `
+    <div class="q-tags">
+      <button class="q-type-tag ${tagCls(tagId)}" onclick="switchTag('${q.id}')">${tagName(tagId)}<span class="swap">切换</span></button>
+    </div>`;
 
   app.innerHTML = `
   <div class="topbar"><button class="back" onclick="back()">‹</button>
     <h1>第 ${paperOf(q.id).id} 套 · 第 ${q.num} 题（${isMulti?'多选':'单选'}）</h1>
     <span style="font-size:13px;opacity:.9">${quiz.idx+1}/${quiz.qs.length}</span></div>
   <div class="page">
-    <div class="q-meta"><span class="tag">${esc(q.subject)}</span>${q.knowledge?`<span class="tag" style="background:var(--warn-light);color:var(--warn)">${esc(q.knowledge)}</span>`:''}
-      ${a?.times?`<span class="tag red">刷过 ${a.times} 次 · 错 ${a.wrongTimes||0} 次</span>`:''}</div>
+    ${tagHtml}
+    <div class="q-meta" style="opacity:.6"><span class="tag" style="background:transparent;color:var(--text-3);padding-left:0">${esc(q.subject)}</span>
+      ${a?.times?`<span style="font-size:11px;color:var(--text-3)">· 刷 ${a.times} 次</span>`:''}</div>
     <div class="q-stem">${esc(q.stem)}</div>
     ${optsHtml}
     ${analysisHtml || `<div class="bottombar">${isMulti
@@ -276,6 +391,36 @@ function recitePrev() {
 function reciteNext() {
   if (quiz.idx < quiz.qs.length - 1) { quiz.idx++; renderQuiz(); window.scrollTo(0, 0); }
   else { state = { view: 'home' }; navStack = []; render(); }
+}
+
+/* 题型标签切换 */
+function switchTag(qid) {
+  const q = qById(qid) || bigById(qid);
+  if (!q) return;
+  const cur = getTag(q);
+  const isBig = Array.isArray(q.questions);
+  const list = QTYPE_TAGS.filter(t => t.id !== 'big' || isBig).map(t =>
+    `<button class="${t.id===cur?'on':''}" onclick="setTag('${qid}','${t.id}')">${t.name}</button>`).join('');
+  openModal(`
+    <div class="tag-switch-list">${list}</div>
+    <button class="btn" style="margin-top:14px" onclick="clearTag('${qid}')">恢复自动识别</button>`, '切换题型标签');
+}
+function setTag(qid, tagId) {
+  P.tags = P.tags || {};
+  P.tags[qid] = tagId; save();
+  closeModal(); render();
+}
+function clearTag(qid) {
+  P.tags = P.tags || {};
+  delete P.tags[qid]; save();
+  closeModal(); render();
+}
+
+/* 解析展开/收起 */
+function toggleAnalysis(qid) {
+  P._analysisCollapsed = P._analysisCollapsed || {};
+  P._analysisCollapsed[qid] = !P._analysisCollapsed[qid];
+  renderQuiz();
 }
 
 function pickOpt(L) {
@@ -448,44 +593,94 @@ function renderAllQ() {
 }
 
 /* ---------- 大题 ---------- */
+/* 三层分层：思路 / 知识点 / 完整答案 */
+function bigLayers(b, sub) {
+  const full = (sub.answer || sub.hints?.join('\n') || '').trim();
+  // 第二层【调用知识点】：从答案里抽取含原理关键词的句子
+  const PRINCIPLE_KW = ['是', '本质', '规律', '原理', '决定', '反作用', '统一', '矛盾', '发展', '联系', '生产力', '生产关系', '经济基础', '上层建筑', '物质', '意识', '实践', '认识', '真理', '价值', '社会存在', '社会意识', '人民群众', '必然', '自由', '量变', '质变', '否定', '内因', '外因', '普遍', '特殊', '主要', '次要'];
+  const knowledgeSentences = [];
+  const sentences = full.split(/[。；\n]/).map(s => s.trim()).filter(s => s.length > 8);
+  for (const s of sentences) {
+    if (PRINCIPLE_KW.some(k => s.includes(k)) && /是|决定|反作用|规律|统一|本质/.test(s)) {
+      if (!knowledgeSentences.includes(s)) knowledgeSentences.push(s);
+    }
+  }
+  // 第一层【答题思路】：从答案里抽"第一/第二/第三"或"首先/其次"分点 + 关键句
+  const thoughtPoints = [];
+  const parts = full.split(/[。；\n]/).map(s => s.trim()).filter(s => s.length > 4);
+  for (const s of parts) {
+    if (/^(第一|第二|第三|第四|首先|其次|再次|最后|一方面|另一方面|一是|二是|三是|一要|二要|三要)/.test(s)) {
+      thoughtPoints.push(s);
+    }
+  }
+  // 若没有明确分点，用前几句作为思路框架
+  if (!thoughtPoints.length) {
+    thoughtPoints.push(...sentences.slice(0, 2).map(s => s.length > 40 ? s.slice(0, 40) + '…' : s));
+  }
+  const knowledge = knowledgeSentences.length ? knowledgeSentences : (sentences.slice(0, 3));
+  return { thought: thoughtPoints.slice(0, 4), knowledge: knowledge.slice(0, 5), full };
+}
+
 function renderBig() {
   const b = bigById(state.bid);
   if (!b) return renderHome();
   const st = P.bigStatus[b.id] = P.bigStatus[b.id] || { viewed: 0, revealed: [] };
   if (!st._counted) { st.viewed++; st.lastTs = Date.now(); st._counted = true; save(); }
   const rv = st.revealed = st.revealed || [];
+  const tagId = getTag(b);
   app.innerHTML = `
   <div class="topbar"><button class="back" onclick="back()">‹</button><h1>第 ${paperOf(b.id)?.id || ''} 套 · 第 ${b.num} 题 · ${esc(b.subject)}</h1></div>
   <div class="page">
-    <div class="q-meta"><span class="tag">已学 ${st.viewed} 次</span><span class="tag orange">10 分</span></div>
+    <div class="q-tags"><button class="q-type-tag ${tagCls(tagId)}" onclick="switchTag('${b.id}')">${tagName(tagId)}<span class="swap">切换</span></button></div>
+    <div class="q-meta" style="opacity:.6"><span class="tag" style="background:transparent;color:var(--text-3);padding-left:0">已学 ${st.viewed} 次</span><span class="tag" style="background:transparent;color:var(--text-3)">10 分</span></div>
     <div class="card"><h2>题干与材料</h2><div class="big-material">${esc(b.stem)}</div></div>
     <div class="card"><h2>问题</h2>
       ${b.questions.map((q, qi) => `<div class="big-q">（${qi+1}）${esc(q.q)}</div>`).join('')}
     </div>
-    <div class="card"><h2>答案 · 分步揭示</h2>
+    <div class="card"><h2>分层解析</h2>
+      <button class="btn small ghost" style="margin-bottom:12px" onclick="bigRevealAll('${b.id}')">一键展开全部</button>
       ${b.questions.map((q, qi) => {
-        const steps = q.hints && q.hints.length ? q.hints : [q.answer];
-        return steps.map((s, si) => {
-          const key = `${qi}-${si}`;
-          const shown = rv.includes(key);
-          return shown
-            ? `<div class="hint-block"><b>步骤 ${si+1}：</b>${esc(s)}</div>`
-            : `<button class="hint-btn" onclick="reveal('${b.id}','${key}')">点击显示 · 第 ${qi+1} 问步骤 ${si+1}</button>`;
-        }).join('') + `<div style="height:6px"></div>`;
+        const L = bigLayers(b, q);
+        const layerKeys = [`${qi}-thought`, `${qi}-know`, `${qi}-full`];
+        const layerDefs = [
+          { key: layerKeys[0], title: '答题思路', hint: '从哪几个角度作答', body: L.thought.map(t => `· ${t}`).join('\n') },
+          { key: layerKeys[1], title: '调用知识点', hint: '课本考点 · 原理', body: L.knowledge.map(t => `· ${t}`).join('\n') },
+          { key: layerKeys[2], title: '完整参考答案', hint: '最终答案', body: L.full }
+        ];
+        return `<div style="margin-bottom:6px"><div style="font-size:14px;font-weight:700;color:var(--text-2);margin:14px 0 8px">第 ${qi+1} 问 · ${esc(q.q.slice(0,30))}</div>
+        ${layerDefs.map((ld, li) => {
+          const shown = rv.includes(ld.key);
+          return `<div class="layer-block ${shown?'open':''}">
+            <button class="layer-head ${shown?'open':''}" onclick="toggleLayer('${b.id}','${ld.key}')">
+              <span class="l-step">${li+1}</span>
+              <span class="l-title">【${ld.title}】</span>
+              <span class="l-hint">${ld.hint}</span>
+              <span class="l-arrow">›</span>
+            </button>
+            <div class="layer-body">${shown ? highlightKw(ld.body) : ''}</div>
+          </div>`;
+        }).join('')}</div>`;
       }).join('')}
-      ${b.analysis ? `<div><button class="hint-btn" style="border-color:var(--primary);color:var(--primary)" onclick="revealAll('${b.id}',${b.questions.length})">展开完整解析</button>
-      ${rv.includes('full') ? `<div class="analysis"><div class="title">完整解析</div><div style="white-space:pre-wrap">${esc(b.analysis)}</div></div>` : ''}</div>` : ''}
     </div>
     <button class="btn ghost" onclick="resetBig('${b.id}')">重新学习（重置揭示状态）</button>
   </div>`;
 }
-function reveal(bid, key) {
-  const st = P.bigStatus[bid]; st.revealed.push(key); save(); renderBig();
-}
-function revealAll(bid, n) {
+function toggleLayer(bid, key) {
   const st = P.bigStatus[bid];
-  if (!st.revealed.includes('full')) st.revealed.push('full');
-  st.revealedAll = true; st.lastTs = Date.now(); save(); renderBig();
+  const i = st.revealed.indexOf(key);
+  if (i >= 0) st.revealed.splice(i, 1); else st.revealed.push(key);
+  save(); renderBig();
+}
+function bigRevealAll(bid) {
+  const st = P.bigStatus[bid];
+  const b = bigById(bid);
+  b.questions.forEach((q, qi) => {
+    ['thought', 'know', 'full'].forEach(k => {
+      const key = `${qi}-${k}`;
+      if (!st.revealed.includes(key)) st.revealed.push(key);
+    });
+  });
+  save(); renderBig();
 }
 function resetBig(bid) {
   const st = P.bigStatus[bid];
@@ -571,7 +766,9 @@ function render() { (views[state.view] || renderHome)(); }
 window.go = go; window.back = back; window.startQuiz = startQuiz; window.pickOpt = pickOpt;
 window.confirmMulti = confirmMulti; window.quizNext = quizNext; window.markReason = markReason;
 window.retryWrong = retryWrong; window.goQuestion = goQuestion; window.wrongReplay = wrongReplay;
-window.reveal = reveal; window.revealAll = revealAll; window.resetBig = resetBig;
+window.toggleLayer = toggleLayer; window.bigRevealAll = bigRevealAll; window.resetBig = resetBig;
+window.switchTag = switchTag; window.setTag = setTag; window.clearTag = clearTag;
+window.toggleAnalysis = toggleAnalysis;
 window.recitePrev = recitePrev; window.reciteNext = reciteNext; window.installApp = installApp;
 window.closeModal = closeModal;
 window.state = state; Object.defineProperty(window, 'state', { get: () => state });
