@@ -107,12 +107,13 @@ function renderHome() {
       <div class="progress"><div style="width:${allQ.length?done/allQ.length*100:0}%"></div></div>
       <div style="font-size:12px;color:var(--text-2);margin-top:6px">选择题进度 ${done}/${allQ.length} · 大题已学 ${bigDone}/${allBig.length}</div>
     </div>
-    <button class="list-item" onclick="go('papers')"><div class="icon">📚</div><div>按套卷刷题<div style="font-size:12px;color:var(--text-2)">8 套卷，单选 + 多选 + 大题</div></div><span class="badge">›</span></button>
-    <button class="list-item" onclick="go('wrong')"><div class="icon">📕</div><div>错题本<div style="font-size:12px;color:var(--text-2)">自动记录，支持重练</div></div><span class="badge">${wrong} 题 ›</span></button>
-    <button class="list-item" onclick="go('stats')"><div class="icon">📊</div><div>统计分析<div style="font-size:12px;color:var(--text-2)">知识点 / 错因 / 进度</div></div><span class="badge">›</span></button>
-    <button class="list-item" onclick="go('allq')"><div class="icon">🔍</div><div>全部题目<div style="font-size:12px;color:var(--text-2)">逐题查看状态与刷题次数</div></div><span class="badge">›</span></button>
+    <button class="list-item" onclick="go('papers')"><div class="icon">题</div><div>按套卷刷题<div style="font-size:12px;color:var(--text-2)">8 套卷，单选 + 多选 + 大题</div></div><span class="badge">›</span></button>
+    <button class="list-item" onclick="go('wrong')"><div class="icon">错</div><div>错题本<div style="font-size:12px;color:var(--text-2)">自动记录，支持重练</div></div><span class="badge">${wrong} 题 ›</span></button>
+    <button class="list-item" onclick="go('stats')"><div class="icon">析</div><div>统计分析<div style="font-size:12px;color:var(--text-2)">知识点 / 错因 / 进度</div></div><span class="badge">›</span></button>
+    <button class="list-item" onclick="go('allq')"><div class="icon">览</div><div>全部题目<div style="font-size:12px;color:var(--text-2)">逐题查看状态与刷题次数</div></div><span class="badge">›</span></button>
+    <button class="list-item" onclick="installApp()"><div class="icon">装</div><div>添加到桌面<div style="font-size:12px;color:var(--text-2)">手机 / 平板 / 电脑都能装，离线可用</div></div><span class="badge">›</span></button>
     <div class="card" style="font-size:12px;color:var(--text-2);line-height:1.7">
-      数据保存在本机浏览器中。iPhone / iPad 用 Safari「添加到主屏幕」，安卓用 Chrome「添加到主屏幕」，即可离线全屏使用。
+      数据保存在本机浏览器中，无需联网登录。添加到桌面后可离线全屏使用。
     </div>
   </div>`;
 }
@@ -124,7 +125,7 @@ function renderPapers() {
     const d = qs.filter(q => P.answers[q.id]?.times).length;
     const c = qs.filter(q => mastery(q.id) === 3).length;
     return `<button class="list-item" onclick="go('paper',{pid:${p.id}})">
-      <div class="icon">📄</div>
+      <div class="icon">${p.id}</div>
       <div style="flex:1">
         <div>第 ${p.id} 套</div>
         <div class="progress" style="max-width:180px"><div style="width:${qs.length?d/qs.length*100:0}%"></div></div>
@@ -153,7 +154,8 @@ function renderPaper() {
         ${ring(qs.length?d/qs.length:0)}
       </div>
     </div>
-    <button class="btn" onclick="startQuiz(${p.id}, 'all')">▶ 全部选择题（${qs.length} 题）</button>
+    <button class="btn" onclick="startQuiz(${p.id}, 'all')">刷题 · 全部选择题（${qs.length} 题）</button>
+    <button class="btn ghost" onclick="startQuiz(${p.id}, 'recite')">背题 · 先看答案再记（${qs.length} 题）</button>
     <button class="btn ghost" onclick="startQuiz(${p.id}, 'singles')">单选 ${p.singles.length} 题</button>
     <button class="btn ghost" onclick="startQuiz(${p.id}, 'multis')">多选 ${p.multis.length} 题</button>
     <button class="btn ghost" onclick="startQuiz(${p.id}, 'wrongOnly')">只练本套错题（${qs.filter(q=>mastery(q.id)===1).length}）</button>
@@ -161,7 +163,7 @@ function renderPaper() {
     ${p.bigs.map(b => {
       const st = P.bigStatus[b.id];
       return `<button class="list-item" onclick="go('big',{bid:'${b.id}'})">
-        <div class="icon">${st?.viewed?'📗':'📘'}</div>
+        <div class="icon">${st?.viewed?'已':'未'}</div>
         <div style="flex:1"><div>第 ${b.num} 题 · ${esc(b.subject)}</div>
         <div style="font-size:12px;color:var(--text-2)">${st?.viewed?`已学 ${st.viewed} 次 · 最近 ${fmtDate(st.lastTs)}`:'未学习'}</div></div>
         <span class="badge">›</span></button>`;
@@ -193,6 +195,39 @@ function renderQuiz() {
   const a = P.answers[q.id];
   const isMulti = q.type === 'multi';
   const doneThis = quiz.results.find(r => r.qid === q.id);
+  const isRecite = quiz.mode === 'recite';
+
+  // 背题模式：纯浏览题干 + 答案 + 解析，不判分，翻页记忆
+  if (isRecite) {
+    app.innerHTML = `
+    <div class="topbar"><button class="back" onclick="back()">‹</button>
+      <h1>背题 · 第 ${paperOf(q.id).id} 套 · 第 ${q.num} 题（${isMulti?'多选':'单选'}）</h1>
+      <span style="font-size:13px;opacity:.9">${quiz.idx+1}/${quiz.qs.length}</span></div>
+    <div class="page">
+      <div class="q-meta"><span class="tag">${esc(q.subject)}</span>${q.knowledge?`<span class="tag" style="background:var(--warn-light);color:var(--warn)">${esc(q.knowledge)}</span>`:''}
+        ${a?.times?`<span class="tag red">已刷 ${a.times} 次 · 错 ${a.wrongTimes||0} 次</span>`:''}</div>
+      <div class="q-stem">${esc(q.stem)}</div>
+      ${q.options.map((t, i) => {
+        const L = 'ABCD'[i];
+        const isAns = q.answer.includes(L);
+        return `<div class="option" style="${isAns?'border-color:var(--ok);background:#e9f7ee;':''}${!isAns?'opacity:.72':''}">
+          <span class="letter" style="${isAns?'color:var(--ok)':''}">${L}.</span><span>${esc(t)}</span>
+          ${isAns?'<span class="tag" style="margin-left:auto;background:#e9f7ee;color:var(--ok);flex-shrink:0">正确</span>':''}
+        </div>`;
+      }).join('')}
+      <div class="recite-answer">
+        <div class="ra-title">答案与解析</div>
+        <div class="ra-key">${esc(q.answer)}</div>
+        <div class="ra-analysis">${esc(q.analysis || '')}</div>
+      </div>
+      <div class="bottombar">
+        <button class="btn ghost" onclick="recitePrev()" ${quiz.idx===0?'disabled':''}>上一题</button>
+        <button class="btn" onclick="reciteNext()">${quiz.idx===quiz.qs.length-1?'返回首页':'下一题'}</button>
+      </div>
+    </div>`;
+    return;
+  }
+
   let optsHtml = q.options.map((t, i) => {
     const L = 'ABCD'[i];
     let cls = 'option';
@@ -211,7 +246,7 @@ function renderQuiz() {
   if (doneThis) {
     const rs = a?.reasons || [];
     analysisHtml = `
-      <div class="analysis"><div class="title">${q.answer.includes(doneThis.picked) && doneThis.picked === q.answer ? '✓ 回答正确' : '✗ 回答错误 · 正确答案 ' + q.answer}</div>
+      <div class="analysis"><div class="title">${q.answer.includes(doneThis.picked) && doneThis.picked === q.answer ? '回答正确' : '回答错误 · 正确答案 ' + q.answer}</div>
       <div>${esc(q.analysis || '')}</div></div>
       ${!doneThis.correct ? `
       <div style="margin-top:12px"><div style="font-size:13px;color:var(--text-2);margin-bottom:6px">这道题做错的原因是？（可选）</div>
@@ -232,6 +267,15 @@ function renderQuiz() {
       ? `<button class="btn" id="confirmBtn" onclick="confirmMulti()">确认（可多选）</button>`
       : `<span style="font-size:13px;color:var(--text-3);align-self:center">点击选项作答</span>`}</div>`}
   </div>`;
+}
+
+/* 背题模式导航：纯浏览，不判分 */
+function recitePrev() {
+  if (quiz.idx > 0) { quiz.idx--; renderQuiz(); window.scrollTo(0, 0); }
+}
+function reciteNext() {
+  if (quiz.idx < quiz.qs.length - 1) { quiz.idx++; renderQuiz(); window.scrollTo(0, 0); }
+  else { state = { view: 'home' }; navStack = []; render(); }
 }
 
 function pickOpt(L) {
@@ -297,7 +341,7 @@ function renderQuizResult() {
       ${wrongs.map(r => { const q = qById(r.qid); return `<button class="list-item" style="margin-bottom:8px" onclick="goQuestion('${r.qid}')">
         <div style="flex:1;font-size:14px">第 ${paperOf(r.qid).id} 套 · ${q.num} 题 · ${esc(q.subject)}</div>
         <span class="badge">›</span></button>`; }).join('')}
-    </div>` : `<div class="card" style="text-align:center;color:var(--ok);font-weight:600">🎉 全部正确！</div>`}
+    </div>` : `<div class="card" style="text-align:center;color:var(--ok);font-weight:600">全部正确</div>`}
     <button class="btn" onclick="state={view:'home'};navStack=[];render()">返回首页</button>
     ${wrongs.length ? `<button class="btn ghost" onclick="retryWrong()">立即重练错题</button>` : ''}
   </div>`;
@@ -320,7 +364,7 @@ function renderWrong() {
   app.innerHTML = `
   <div class="topbar"><button class="back" onclick="back()">‹</button><h1>错题本（${all.length}）</h1></div>
   <div class="page">
-    ${all.length ? `<button class="btn" onclick="wrongReplay()">▶ 重练全部错题（${n1}）</button>` : ''}
+    ${all.length ? `<button class="btn" onclick="wrongReplay()">重练全部错题（${n1}）</button>` : ''}
     ${all.length ? all.map(q => {
       const a = P.answers[q.id], m = mastery(q.id);
       return `<button class="list-item" onclick="goQuestion('${q.id}')">
@@ -328,7 +372,7 @@ function renderWrong() {
         <div style="flex:1"><div style="font-size:14px">第 ${paperOf(q.id).id} 套 · ${q.num} 题 · ${esc(q.subject)}</div>
         <div style="font-size:12px;color:var(--text-2);margin-top:3px">刷 ${a.times} 次 · 错 ${a.wrongTimes||0} 次${a.reasons.length?' · '+a.reasons.join('/'):''}</div></div>
         <span class="badge">${m===2?'模糊':'错题'} ›</span></button>`;
-    }).join('') : `<div class="card" style="text-align:center;color:var(--text-2)">暂无错题，继续保持！✊</div>`}
+    }).join('') : `<div class="card" style="text-align:center;color:var(--text-2)">暂无错题，继续保持</div>`}
   </div>`;
 }
 function wrongReplay() {
@@ -426,10 +470,10 @@ function renderBig() {
           const shown = rv.includes(key);
           return shown
             ? `<div class="hint-block"><b>步骤 ${si+1}：</b>${esc(s)}</div>`
-            : `<button class="hint-btn" onclick="reveal('${b.id}','${key}')">👁 点击显示 · 第 ${qi+1} 问步骤 ${si+1}</button>`;
+            : `<button class="hint-btn" onclick="reveal('${b.id}','${key}')">点击显示 · 第 ${qi+1} 问步骤 ${si+1}</button>`;
         }).join('') + `<div style="height:6px"></div>`;
       }).join('')}
-      ${b.analysis ? `<div><button class="hint-btn" style="border-color:var(--primary);color:var(--primary)" onclick="revealAll('${b.id}',${b.questions.length})">📖 展开完整解析</button>
+      ${b.analysis ? `<div><button class="hint-btn" style="border-color:var(--primary);color:var(--primary)" onclick="revealAll('${b.id}',${b.questions.length})">展开完整解析</button>
       ${rv.includes('full') ? `<div class="analysis"><div class="title">完整解析</div><div style="white-space:pre-wrap">${esc(b.analysis)}</div></div>` : ''}</div>` : ''}
     </div>
     <button class="btn ghost" onclick="resetBig('${b.id}')">重新学习（重置揭示状态）</button>
@@ -449,6 +493,77 @@ function resetBig(bid) {
   save(); toast('已重置'); renderBig();
 }
 
+/* ---------- 一键添加到桌面（PWA 安装引导） ---------- */
+let PWA_PROMPT = null;
+try {
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); PWA_PROMPT = e; });
+  window.addEventListener('appinstalled', () => { PWA_PROMPT = null; toast('已安装，桌面图标就绪'); });
+} catch (e) {}
+
+function isStandalone() {
+  try {
+    return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+      || window.navigator.standalone === true;
+  } catch (e) { return false; }
+}
+function isIOS() {
+  const ua = navigator.userAgent || '';
+  return /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && 'ontouchstart' in window);
+}
+function isWechat() { return /MicroMessenger/i.test(navigator.userAgent || ''); }
+
+function openModal(html, title) {
+  const m = document.createElement('div');
+  m.className = 'modal-mask';
+  m.innerHTML = `<div class="modal"><h3>${title || '提示'}</h3>${html}</div>`;
+  m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+  document.body.appendChild(m);
+}
+function closeModal() {
+  const m = document.querySelector('.modal-mask');
+  if (m) m.remove();
+}
+
+function installApp() {
+  if (isStandalone()) { toast('已经在桌面模式打开'); return; }
+  // 安卓 / 鸿蒙 / 桌面 Chrome：能弹原生安装框
+  if (PWA_PROMPT) {
+    PWA_PROMPT.prompt();
+    PWA_PROMPT.userChoice.then(r => {
+      if (r.outcome === 'accepted') toast('安装成功，桌面图标就绪');
+      PWA_PROMPT = null;
+    }).catch(() => {});
+    return;
+  }
+  // 微信内打开：提示跳转到浏览器
+  if (isWechat()) {
+    openModal(`
+      <p style="font-size:14px;color:var(--text-2)">微信内置浏览器没有「添加到桌面」选项，需要先跳出去：</p>
+      <div class="install-step"><div class="is-num">1</div><div class="is-txt">点右上角 <b>···</b></div></div>
+      <div class="install-step"><div class="is-num">2</div><div class="is-txt">选 <b>在浏览器打开</b>（建议 Safari）</div></div>
+      <div class="install-step"><div class="is-num">3</div><div class="is-txt">打开后按下方对应系统操作</div></div>
+      <button class="btn" style="margin:12px 0 0" onclick="closeModal()">知道了</button>`, '添加到桌面');
+    return;
+  }
+  // iOS：分步图文引导
+  if (isIOS()) {
+    openModal(`
+      <p style="font-size:14px;color:var(--text-2)">iPhone / iPad 需手动添加，共 4 步：</p>
+      <div class="install-step"><div class="is-num">1</div><div class="is-txt">确认用 <b>Safari</b> 打开（不是微信）</div></div>
+      <div class="install-step"><div class="is-num">2</div><div class="is-txt">点屏幕底部的 <b>分享</b> 图标（方框带向上箭头 ↑）</div></div>
+      <div class="install-step"><div class="is-num">3</div><div class="is-txt">菜单往下滑，找 <b>添加到主屏幕</b></div></div>
+      <div class="install-step"><div class="is-num">4</div><div class="is-txt">点右上角 <b>添加</b>，桌面就有图标了</div></div>
+      <button class="btn" style="margin:12px 0 0" onclick="closeModal()">知道了</button>`, '添加到桌面');
+    return;
+  }
+  // 其他浏览器：通用引导
+  openModal(`
+    <p style="font-size:14px;color:var(--text-2)">请通过浏览器菜单添加：</p>
+    <div class="install-step"><div class="is-num">1</div><div class="is-txt">点浏览器右上角 <b>菜单</b>（··· 或 ☰）</div></div>
+    <div class="install-step"><div class="is-num">2</div><div class="is-txt">找 <b>安装应用</b> 或 <b>添加到主屏幕</b></div></div>
+    <button class="btn" style="margin:12px 0 0" onclick="closeModal()">知道了</button>`, '添加到桌面');
+}
+
 /* ---------- 渲染入口 ---------- */
 const views = { home: renderHome, papers: renderPapers, paper: renderPaper, quiz: renderQuiz,
   quizResult: renderQuizResult, wrong: renderWrong, stats: renderStats, allq: renderAllQ, big: renderBig };
@@ -457,6 +572,8 @@ window.go = go; window.back = back; window.startQuiz = startQuiz; window.pickOpt
 window.confirmMulti = confirmMulti; window.quizNext = quizNext; window.markReason = markReason;
 window.retryWrong = retryWrong; window.goQuestion = goQuestion; window.wrongReplay = wrongReplay;
 window.reveal = reveal; window.revealAll = revealAll; window.resetBig = resetBig;
+window.recitePrev = recitePrev; window.reciteNext = reciteNext; window.installApp = installApp;
+window.closeModal = closeModal;
 window.state = state; Object.defineProperty(window, 'state', { get: () => state });
 
 fetch('data/questions.json').then(r => r.json()).then(d => {
@@ -464,3 +581,10 @@ fetch('data/questions.json').then(r => r.json()).then(d => {
 }).catch(e => {
   app.innerHTML = '<div style="padding:40px;text-align:center;color:#666">题目数据加载失败：' + esc(e.message) + '</div>';
 });
+
+/* 注册 Service Worker，实现离线缓存 */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}

@@ -1,10 +1,10 @@
 /* 肖八刷题 - 移动优先样式 */
 :root {
-  --primary: #1a6b3c;
-  --primary-light: #e8f3ec;
-  --primary-dark: #124f2c;
-  --danger: #d64545;
-  --danger-light: #fdeaea;
+  --primary: #c8102e;
+  --primary-light: #fdedf0;
+  --primary-dark: #9c0c22;
+  --danger: #c8102e;
+  --danger-light: #fdedf0;
   --warn: #d98e04;
   --warn-light: #fdf3df;
   --ok: #2e9e5b;
@@ -139,6 +139,24 @@ body {
   display: flex; gap: 10px;
 }
 .bottombar .btn { margin: 0; }
+
+/* 背题模式：先看答案卡片 */
+.recite-answer {
+  background: #fff8e6; border: 1.5px solid #f2e3c4; border-radius: 12px;
+  padding: 14px; margin: 14px 0; font-size: 15px; line-height: 1.8;
+}
+.recite-answer .ra-title { font-weight: 700; color: #8a5a00; margin-bottom: 6px; }
+.recite-answer .ra-key { font-size: 22px; font-weight: 800; color: var(--primary); letter-spacing: 2px; margin-bottom: 8px; }
+.recite-answer .ra-analysis { color: #6b5a3c; font-size: 14px; }
+
+/* 安装引导弹层内的步骤 */
+.install-step { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; }
+.install-step .is-num {
+  width: 22px; height: 22px; border-radius: 50%; background: var(--primary); color: #fff;
+  font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; margin-top: 2px;
+}
+.install-step .is-txt { font-size: 14px; line-height: 1.7; color: var(--text); flex: 1; }
 
 /* 套卷进度格 */
 .paper-cell {
